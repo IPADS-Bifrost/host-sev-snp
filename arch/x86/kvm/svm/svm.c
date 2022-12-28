@@ -3266,12 +3266,35 @@ static int svm_handle_invalid_exit(struct kvm_vcpu *vcpu, u64 exit_code)
 	vcpu->run->internal.data[1] = vcpu->arch.last_vmentry_cpu;
 	return 0;
 }
+#define VCPU_NR (120)
+#define EXIT_REASON_MAX (0x405)
+atomic64_t vmexit_cnt[VCPU_NR][EXIT_REASON_MAX];
+atomic64_t vmexit_cycle[VCPU_NR][EXIT_REASON_MAX];
+bool vmexit_record_en = false;
+atomic_t vmexit_first[VCPU_NR];
+EXPORT_SYMBOL_GPL(vmexit_cycle);
+EXPORT_SYMBOL_GPL(vmexit_cnt);
+EXPORT_SYMBOL_GPL(vmexit_record_en);
+EXPORT_SYMBOL_GPL(vmexit_first);
+static uint64_t st[VCPU_NR], en[VCPU_NR];
+u32 exit_code_saved[VCPU_NR];
+EXPORT_SYMBOL_GPL(exit_code_saved);
+uint64_t breakdown_st = 0;
+EXPORT_SYMBOL_GPL(breakdown_st);
 
 int svm_invoke_exit_handler(struct kvm_vcpu *vcpu, u64 exit_code)
 {
+	int vcpu_id = vcpu->vcpu_id;
 	if (!svm_check_exit_valid(exit_code))
 		return svm_handle_invalid_exit(vcpu, exit_code);
 
+	if (vmexit_record_en) {
+		if (vcpu_id >= VCPU_NR) {
+			vcpu_id = VCPU_NR - 1;
+		}
+		// if (exit_code != SVM_EXIT_VMGEXIT)
+		exit_code_saved[vcpu_id] = exit_code;
+	}
 #ifdef CONFIG_RETPOLINE
 	if (exit_code == SVM_EXIT_MSR)
 		return msr_interception(vcpu);
@@ -3788,11 +3811,44 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	unsigned long vmcb_pa = svm->current_vmcb->pa;
+	int vcpu_id = vcpu->vcpu_id;
+	bool is_first = false;
+	if (vcpu_id >= VCPU_NR) {
+		pr_warn_once("vcpu id %d >= 120\n", vcpu_id);
+	}
+	
+	if (vmexit_record_en) {
+		is_first = atomic_read(&vmexit_first[vcpu_id]);
+		if (is_first) {
+			atomic_set(&vmexit_first[vcpu_id], 0);
+		}
+	}
 
 	guest_state_enter_irqoff();
 
 	if (sev_es_guest(vcpu->kvm)) {
+		if (vmexit_record_en) {
+			en[vcpu_id] = rdtsc_ordered();
+			if (!is_first) {
+				u32 exit_code = exit_code_saved[vcpu_id];
+				if (exit_code >= EXIT_REASON_MAX) {
+					pr_warn_once("unknown exit_reason %u\n", exit_code);
+					exit_code = EXIT_REASON_MAX - 1;
+				}
+				if (unlikely(en[vcpu_id] < st[vcpu_id])) {
+					pr_warn_once("en < st\n");
+				}
+				atomic64_inc(&vmexit_cnt[vcpu_id][exit_code]);
+				atomic64_add(en[vcpu_id] - st[vcpu_id], &vmexit_cycle[vcpu_id][exit_code]);
+			}
+		}
+
 		__svm_sev_es_vcpu_run(vmcb_pa);
+
+		if (vmexit_record_en) {
+			// exit_code_saved[vcpu_id] = svm->vmcb->control.exit_code;
+			st[vcpu_id] = rdtsc_ordered();
+		}
 	} else {
 		struct svm_cpu_data *sd = per_cpu(svm_data, vcpu->cpu);
 
@@ -3803,7 +3859,29 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		 * vmcb02 when switching vmcbs for nested virtualization.
 		 */
 		vmload(svm->vmcb01.pa);
+
+		if (vmexit_record_en) {
+			en[vcpu_id] = rdtsc_ordered();
+			if (!is_first) {
+				u32 exit_code = exit_code_saved[vcpu_id];
+				if (exit_code >= EXIT_REASON_MAX) {
+					pr_warn_once("unknown exit_reason %u\n", exit_code);
+					exit_code = EXIT_REASON_MAX - 1;
+				}
+				if (unlikely(en[vcpu_id] < st[vcpu_id])) {
+					pr_warn_once("en < st\n");
+				}
+				atomic64_inc(&vmexit_cnt[vcpu_id][exit_code]);
+				atomic64_add(en[vcpu_id] - st[vcpu_id], &vmexit_cycle[vcpu_id][exit_code]);
+			}
+		}
 		__svm_vcpu_run(vmcb_pa, (unsigned long *)&vcpu->arch.regs);
+
+		if (vmexit_record_en) {
+			exit_code_saved[vcpu_id] = svm->vmcb->control.exit_code;
+			st[vcpu_id] = rdtsc_ordered();
+		}
+
 		vmsave(svm->vmcb01.pa);
 
 		vmload(__sme_page_pa(sd->save_area));

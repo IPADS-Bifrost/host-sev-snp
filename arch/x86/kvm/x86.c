@@ -10003,6 +10003,14 @@ EXPORT_SYMBOL_GPL(__kvm_request_immediate_exit);
  * exiting to the userspace.  Otherwise, the value will be returned to the
  * userspace.
  */
+
+// atomic64_t vmexit_cycle;
+// atomic64_t vmexit_cnt;
+// bool vmexit_record_en = false;
+// EXPORT_SYMBOL_GPL(vmexit_cycle);
+// EXPORT_SYMBOL_GPL(vmexit_cnt);
+// EXPORT_SYMBOL_GPL(vmexit_record_en);
+
 static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 {
 	int r;
@@ -10012,6 +10020,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 	fastpath_t exit_fastpath;
 
 	bool req_immediate_exit = false;
+	// uint64_t st, en;
 
 	/* Forbid vmenter if vcpu dirty ring is soft-full */
 	if (unlikely(vcpu->kvm->dirty_ring_size &&
@@ -10363,8 +10372,13 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 	if (vcpu->arch.apic_attention)
 		kvm_lapic_sync_from_vapic(vcpu);
-
+	// st = rdtsc_ordered();
 	r = static_call(kvm_x86_handle_exit)(vcpu, exit_fastpath);
+	// en = rdtsc_ordered();
+	// if (vmexit_record_en) {
+	// 	atomic64_inc(&vmexit_cnt);
+	// 	atomic64_add(en - st, &vmexit_cycle);
+	// }
 	return r;
 
 cancel_injection:

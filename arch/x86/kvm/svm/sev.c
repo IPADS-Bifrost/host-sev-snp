@@ -4088,12 +4088,25 @@ static int sev_handle_vmgexit_msr_protocol(struct vcpu_svm *svm)
 	return ret;
 }
 
+#define VCPU_NR (120)
+#define EXIT_REASON_MAX (0x405)
+
+extern atomic64_t vmexit_cnt[][EXIT_REASON_MAX];
+extern atomic64_t vmexit_cycle[][EXIT_REASON_MAX];
+extern atomic_t vmexit_first[];
+extern bool vmexit_record_en;
+extern u32 exit_code_saved[];
 int sev_handle_vmgexit(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	struct vmcb_control_area *control = &svm->vmcb->control;
 	u64 ghcb_gpa, exit_code;
 	int ret;
+	int vcpu_id = vcpu->vcpu_id;
+	if (vmexit_record_en)
+	if (vcpu_id >= VCPU_NR) {
+		vcpu_id = VCPU_NR - 1;
+	}
 
 	/* Validate the GHCB */
 	ghcb_gpa = control->ghcb_gpa;
@@ -4124,6 +4137,7 @@ int sev_handle_vmgexit(struct kvm_vcpu *vcpu)
 
 	switch (exit_code) {
 	case SVM_VMGEXIT_MMIO_READ:
+		if (vmexit_record_en) exit_code_saved[vcpu_id] = 0x400 - 1;
 		ret = setup_vmgexit_scratch(svm, true, control->exit_info_2);
 		if (ret)
 			break;
@@ -4134,6 +4148,7 @@ int sev_handle_vmgexit(struct kvm_vcpu *vcpu)
 					   svm->sev_es.ghcb_sa);
 		break;
 	case SVM_VMGEXIT_MMIO_WRITE:
+		if (vmexit_record_en) exit_code_saved[vcpu_id] = 0x400 - 1;
 		ret = setup_vmgexit_scratch(svm, false, control->exit_info_2);
 		if (ret)
 			break;
@@ -4144,15 +4159,18 @@ int sev_handle_vmgexit(struct kvm_vcpu *vcpu)
 					    svm->sev_es.ghcb_sa);
 		break;
 	case SVM_VMGEXIT_NMI_COMPLETE:
+		if (vmexit_record_en) exit_code_saved[vcpu_id] = 0x400 - 3;
 		ret = svm_invoke_exit_handler(vcpu, SVM_EXIT_IRET);
 		break;
 	case SVM_VMGEXIT_AP_HLT_LOOP:
+		if (vmexit_record_en)exit_code_saved[vcpu_id] = 0x400 - 4;
 		svm->sev_es.ap_reset_hold_type = AP_RESET_HOLD_NAE_EVENT;
 		ret = kvm_emulate_ap_reset_hold(vcpu);
 		break;
 	case SVM_VMGEXIT_AP_JUMP_TABLE: {
+		
 		struct kvm_sev_info *sev = &to_kvm_svm(vcpu->kvm)->sev_info;
-
+		if (vmexit_record_en) exit_code_saved[vcpu_id] = 0x400 - 5;
 		switch (control->exit_info_1) {
 		case 0:
 			/* Set AP jump table address */
@@ -4173,6 +4191,7 @@ int sev_handle_vmgexit(struct kvm_vcpu *vcpu)
 		break;
 	}
 	case SVM_VMGEXIT_HV_FEATURES: {
+		if (vmexit_record_en) exit_code_saved[vcpu_id] = 0x400 - 6;
 		svm_set_ghcb_sw_exit_info_2(vcpu, GHCB_HV_FT_SUPPORTED);
 
 		ret = 1;
@@ -4182,18 +4201,20 @@ int sev_handle_vmgexit(struct kvm_vcpu *vcpu)
 		unsigned long rc;
 
 		ret = 1;
-
+		if (vmexit_record_en) exit_code_saved[vcpu_id] = 0x400 - 7;
 		rc = snp_handle_page_state_change(svm);
 		svm_set_ghcb_sw_exit_info_2(vcpu, rc);
 		break;
 	}
 	case SVM_VMGEXIT_GUEST_REQUEST: {
+		if (vmexit_record_en) exit_code_saved[vcpu_id] = 0x400 - 8;
 		snp_handle_guest_request(svm, control->exit_info_1, control->exit_info_2);
 
 		ret = 1;
 		break;
 	}
 	case SVM_VMGEXIT_EXT_GUEST_REQUEST: {
+		if (vmexit_record_en) exit_code_saved[vcpu_id] = 0x400 - 9;
 		snp_handle_ext_guest_request(svm,
 					     control->exit_info_1,
 					     control->exit_info_2);
@@ -4202,6 +4223,7 @@ int sev_handle_vmgexit(struct kvm_vcpu *vcpu)
 		break;
 	}
 	case SVM_VMGEXIT_AP_CREATION:
+		if (vmexit_record_en) exit_code_saved[vcpu_id] = 0x400 - 10;
 		ret = sev_snp_ap_creation(svm);
 		if (ret) {
 			svm_set_ghcb_sw_exit_info_1(vcpu, 1);
